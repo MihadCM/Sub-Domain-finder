@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -9,6 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 )
@@ -69,8 +74,8 @@ func runSubdomainEnumeration(domain string) ([]string, error) {
 	// Run Sublist3r
 	fmt.Println(" Running Sublist3r...")
 
-	pythonPath := "/Users/mihad/Desktop/folder/Sublist3r/venv/bin/python" // path to venv Python
-	sublist3rPath := "/Users/mihad/Desktop/folder/Sublist3r"
+	pythonPath := "/Users/mihad/Desktop/SecIq/Sublist3r/venv/bin/python" // path to venv Python
+	sublist3rPath := "/Users/mihad/Desktop/SecIq/Sublist3r"
 
 	sublist3rCmd := exec.Command(pythonPath, "sublist3r.py", "-d", domain)
 	sublist3rCmd.Dir = sublist3rPath
@@ -107,6 +112,8 @@ func runSubdomainEnumeration(domain string) ([]string, error) {
 		// Remove ANSI color codes (like \033[92m, \033[0m, etc.)
 		ansiRegex := regexp.MustCompile(`\033\[[0-9;]*[a-zA-Z]`)
 		line = ansiRegex.ReplaceAllString(line, "")
+
+		// Find all subdomains in the line, not just check if line matches
 		matches := subdomainRegex.FindAllString(line, -1)
 		sublist3rFiltered = append(sublist3rFiltered, matches...)
 	}
@@ -116,6 +123,77 @@ func runSubdomainEnumeration(domain string) ([]string, error) {
 	combined_subs := deduplicate(combined)
 
 	return combined_subs, nil
+}
+
+// DynamoDB client initialization
+func getDynamoDBClient() (*dynamodb.Client, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion("us-east-1"), // or your AWS region
+	)
+	if err != nil {
+		return nil, err
+	}
+	return dynamodb.NewFromConfig(cfg), nil
+}
+
+// Store subdomains result in DynamoDB
+func storeSubdomainsToDynamoDB(domain string, subdomains []string) error {
+	client, err := getDynamoDBClient()
+	if err != nil {
+		return err
+	}
+	input := &dynamodb.PutItemInput{
+		TableName: aws.String("subdomains"),
+		Item: map[string]types.AttributeValue{
+			"domain":           &types.AttributeValueMemberS{Value: domain},
+			"subdomain_length": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", len(subdomains))},
+			"subdomain_list": &types.AttributeValueMemberL{Value: func() []types.AttributeValue {
+				list := make([]types.AttributeValue, len(subdomains))
+				for i, sub := range subdomains {
+					list[i] = &types.AttributeValueMemberS{Value: sub}
+				}
+				return list
+			}()},
+		},
+	}
+	_, err = client.PutItem(context.TODO(), input)
+	return err
+}
+
+// Retrieve subdomains from DynamoDB
+func getSubdomainsFromDynamoDB(domain string) ([]string, bool, error) {
+	client, err := getDynamoDBClient()
+	if err != nil {
+		return nil, false, err
+	}
+	input := &dynamodb.GetItemInput{
+		TableName: aws.String("subdomains"),
+		Key: map[string]types.AttributeValue{
+			"domain": &types.AttributeValueMemberS{Value: domain},
+		},
+	}
+	result, err := client.GetItem(context.TODO(), input)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(result.Item) == 0 {
+		return nil, false, nil
+	}
+	attr, ok := result.Item["subdomain_list"]
+	if !ok {
+		return nil, false, nil
+	}
+	listAttr, ok := attr.(*types.AttributeValueMemberL)
+	if !ok {
+		return nil, false, nil
+	}
+	subdomains := make([]string, 0, len(listAttr.Value))
+	for _, v := range listAttr.Value {
+		if s, ok := v.(*types.AttributeValueMemberS); ok {
+			subdomains = append(subdomains, s.Value)
+		}
+	}
+	return subdomains, true, nil
 }
 
 func main() {
@@ -150,36 +228,78 @@ func main() {
 			})
 		}
 
-		// Run subdomain enumeration
+		// 1. Check DynamoDB first
+		subdomains, found, err := getSubdomainsFromDynamoDB(request.Domain)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "DB error: " + err.Error(),
+			})
+		}
+		if found {
+			return c.JSON(subdomains)
+		}
+
+		// 2. Run subdomain enumeration
 		combined_subs, err := runSubdomainEnumeration(request.Domain)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": err.Error(),
 			})
 		}
-
-		// Return the combined_subs variable directly as an array
-		// This matches what the frontend expects
-		return c.JSON(combined_subs)
+		if len(combined_subs) > 0 {
+			if err := storeSubdomainsToDynamoDB(request.Domain, combined_subs); err != nil {
+				fmt.Println("Failed to store in DynamoDB:", err)
+			}
+			return c.JSON(combined_subs)
+		} else {
+			fmt.Println("No subdomains found, not storing to DynamoDB.")
+			return c.Status(404).JSON(fiber.Map{
+				"error": "No subdomains found for this domain",
+			})
+		}
 	})
 
 	// Additional GET endpoint for convenience
 	app.Get("/api/subdomains/:domain", func(c *fiber.Ctx) error {
 		domain := c.Params("domain")
 
-		// Run subdomain enumeration
+		// 1. Check DynamoDB first
+		subdomains, found, err := getSubdomainsFromDynamoDB(domain)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "DB error: " + err.Error(),
+			})
+		}
+		if found {
+			return c.JSON(fiber.Map{
+				"domain":     domain,
+				"subdomains": subdomains,
+				"count":      len(subdomains),
+			})
+		}
+
+		// 2. Run subdomain enumeration
 		combined_subs, err := runSubdomainEnumeration(domain)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": err.Error(),
 			})
 		}
-
-		return c.JSON(fiber.Map{
-			"domain":     domain,
-			"subdomains": combined_subs, // This is your combined_subs variable
-			"count":      len(combined_subs),
-		})
+		if len(combined_subs) > 0 {
+			if err := storeSubdomainsToDynamoDB(domain, combined_subs); err != nil {
+				fmt.Println("Failed to store in DynamoDB:", err)
+			}
+			return c.JSON(fiber.Map{
+				"domain":     domain,
+				"subdomains": combined_subs,
+				"count":      len(combined_subs),
+			})
+		} else {
+			fmt.Println("No subdomains found, not storing to DynamoDB.")
+			return c.Status(404).JSON(fiber.Map{
+				"error": "No subdomains found for this domain",
+			})
+		}
 	})
 
 	// Health check endpoint
