@@ -70,7 +70,7 @@ func runSubdomainEnumeration(domain string) ([]string, error) {
 	fmt.Println(" Running Sublist3r...")
 
 	pythonPath := "/Users/mihad/Desktop/folder/Sublist3r/venv/bin/python" // path to venv Python
-	sublist3rPath := "/Users/mihad/Desktop/folder/Sublist3r" //path to sublist3r
+	sublist3rPath := "/Users/mihad/Desktop/folder/Sublist3r"
 
 	sublist3rCmd := exec.Command(pythonPath, "sublist3r.py", "-d", domain)
 	sublist3rCmd.Dir = sublist3rPath
@@ -103,10 +103,12 @@ func runSubdomainEnumeration(domain string) ([]string, error) {
 	var sublist3rFiltered []string
 	for _, line := range sublist3rRaw {
 		line = strings.TrimSpace(line)
-		if subdomainRegex.MatchString(line) {
-			sub := subdomainRegex.FindString(line)
-			sublist3rFiltered = append(sublist3rFiltered, sub)
-		}
+
+		// Remove ANSI color codes (like \033[92m, \033[0m, etc.)
+		ansiRegex := regexp.MustCompile(`\033\[[0-9;]*[a-zA-Z]`)
+		line = ansiRegex.ReplaceAllString(line, "")
+		matches := subdomainRegex.FindAllString(line, -1)
+		sublist3rFiltered = append(sublist3rFiltered, matches...)
 	}
 
 	// Combine and deduplicate
