@@ -42,7 +42,7 @@ A comprehensive subdomain enumeration tool that combines Subfinder and Sublist3r
 ```bash
 cd finder-backend
 go mod tidy
-go run .
+go run main.go
 ```
 
 ### 2. Start the Frontend
