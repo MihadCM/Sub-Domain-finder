@@ -69,8 +69,8 @@ func runSubdomainEnumeration(domain string) ([]string, error) {
 	// Run Sublist3r
 	fmt.Println(" Running Sublist3r...")
 
-	pythonPath := "/Users/mihad/Desktop/SecIq/Sublist3r/venv/bin/python" // path to venv Python
-	sublist3rPath := "/Users/mihad/Desktop/SecIq/Sublist3r"
+	pythonPath := "/Users/mihad/Desktop/folder/Sublist3r/venv/bin/python" // path to venv Python
+	sublist3rPath := "/Users/mihad/Desktop/folder/Sublist3r" //path to sublist3r
 
 	sublist3rCmd := exec.Command(pythonPath, "sublist3r.py", "-d", domain)
 	sublist3rCmd.Dir = sublist3rPath
