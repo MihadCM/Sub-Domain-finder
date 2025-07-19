@@ -73,8 +73,8 @@ npm start
 ### Backend Paths
 Update these paths in `finder-backend/main.go`:
 ```go
-pythonPath := "/Users/mihad/Desktop/SecIq/Sublist3r/venv/bin/python"
-sublist3rPath := "/Users/mihad/Desktop/SecIq/Sublist3r"
+pythonPath := "/Users/name/Desktop/folder/Sublist3r/venv/bin/python" // your python env location
+sublist3rPath := "/Users/name/Desktop/folder/Sublist3r" // sublist3r tool location
 ```
 
 ### Frontend API URL
