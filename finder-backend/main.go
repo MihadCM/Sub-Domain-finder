@@ -193,13 +193,14 @@ func getSubdomainsFromDynamoDB(domain string) ([]string, bool, error) {
 			subdomains = append(subdomains, s.Value)
 		}
 	}
+	fmt.Println("got subdomains from dynamo db")
 	return subdomains, true, nil
 }
 
 func main() {
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
-		ReadTimeout:  30 * time.Minute, // Allow long-running scans
+		ReadTimeout:  30 * time.Minute,
 		WriteTimeout: 30 * time.Minute,
 	})
 
@@ -259,55 +260,5 @@ func main() {
 		}
 	})
 
-	// Additional GET endpoint for convenience
-	app.Get("/api/subdomains/:domain", func(c *fiber.Ctx) error {
-		domain := c.Params("domain")
-
-		// 1. Check DynamoDB first
-		subdomains, found, err := getSubdomainsFromDynamoDB(domain)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": "DB error: " + err.Error(),
-			})
-		}
-		if found {
-			return c.JSON(fiber.Map{
-				"domain":     domain,
-				"subdomains": subdomains,
-				"count":      len(subdomains),
-			})
-		}
-
-		// 2. Run subdomain enumeration
-		combined_subs, err := runSubdomainEnumeration(domain)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": err.Error(),
-			})
-		}
-		if len(combined_subs) > 0 {
-			if err := storeSubdomainsToDynamoDB(domain, combined_subs); err != nil {
-				fmt.Println("Failed to store in DynamoDB:", err)
-			}
-			return c.JSON(fiber.Map{
-				"domain":     domain,
-				"subdomains": combined_subs,
-				"count":      len(combined_subs),
-			})
-		} else {
-			fmt.Println("No subdomains found, not storing to DynamoDB.")
-			return c.Status(404).JSON(fiber.Map{
-				"error": "No subdomains found for this domain",
-			})
-		}
-	})
-
-	// Health check endpoint
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status": "healthy",
-		})
-	})
-	// Start the server
 	app.Listen(":3000")
 }
